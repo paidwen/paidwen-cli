@@ -1,0 +1,13 @@
+package: contract
+output: ../cli/internal/contract/contract.gen.go
+generate:
+  models: true
+output-options:
+  include-tags:
+    - decisions
+    - traces
+    - caller
+    - oauth
+  name-normalizer: ToCamelCaseWithInitialisms
+compatibility:
+  always-prefix-enum-values: true
