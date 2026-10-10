@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -676,5 +678,42 @@ func TestCursorReadsTheAnswerFromTheOutputTemplate(t *testing.T) {
 	code, stdout, stderr := h.run(shell("ls"), "-tool-name", "shell", "-output", "{{.Missing}}")
 	if code != 2 || stdout != "" || !strings.HasPrefix(stderr, "Paidwen refused the action: the -output template fails: ") {
 		t.Fatalf("a broken template = %d %q %q", code, stdout, stderr)
+	}
+}
+
+func TestATemplateFileAnswersInJSONAndStaysSilentOnAllow(t *testing.T) {
+	h := newHarness(t)
+	h.decide = func(w http.ResponseWriter, request contract.DecisionRequest) {
+		if command, _ := (*request.Params)["command"].(string); strings.Contains(command, "push") {
+			reply(w, ruled(h.decision(request, contract.VerdictBlock), "rule-push", "No force push"))
+			return
+		}
+		reply(w, h.decision(request, contract.VerdictAllow))
+	}
+	file := filepath.Join(t.TempDir(), "deny.tmpl")
+	answerTemplate := `{{ if not .Allowed }}{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":{{ json .Reason }}}}{{ end }}` + "\n"
+	if err := os.WriteFile(file, []byte(answerTemplate), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	line := claude("-output-file", file)
+	if code, stdout, stderr := h.run(`{"session_id":"s-1","cwd":"/work","tool_name":"Bash","tool_input":{"command":"ls"},"tool_use_id":"exec-1"}`, line...); code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("allow = %d %q %q", code, stdout, stderr)
+	}
+	code, stdout, stderr := h.run(`{"session_id":"s-1","cwd":"/work","tool_name":"Bash","tool_input":{"command":"git push -f origin main"},"tool_use_id":"exec-2"}`, line...)
+	var answer struct {
+		HookSpecificOutput struct {
+			PermissionDecision       string `json:"permissionDecision"`
+			PermissionDecisionReason string `json:"permissionDecisionReason"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &answer); code != 0 || stderr != "" || err != nil {
+		t.Fatalf("deny = %d %q %q", code, stdout, stderr)
+	}
+	if answer.HookSpecificOutput.PermissionDecision != "deny" || answer.HookSpecificOutput.PermissionDecisionReason != `Paidwen blocked Bash: the rule "No force push" refuses it.` {
+		t.Fatalf("deny = %+v", answer)
+	}
+	code, stdout, stderr = h.run(`{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"ls"}}`, claude("-output-file", file, "-output", "{{.Reason}}")...)
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "only one of them") {
+		t.Fatalf("both templates = %d %q %q", code, stdout, stderr)
 	}
 }

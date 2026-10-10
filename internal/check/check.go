@@ -12,6 +12,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/template"
@@ -79,6 +81,8 @@ type options struct {
 	wait          time.Duration
 	timeout       time.Duration
 	onUnavailable string
+	outputText    string
+	outputFile    string
 	output        *template.Template
 }
 
@@ -117,18 +121,45 @@ func (o *options) register(set *flag.FlagSet) {
 	set.DurationVar(&o.wait, "wait", 50*time.Second, "how long to wait for a human approval, shorter than the timeout of the hook")
 	set.DurationVar(&o.timeout, "timeout", 3*time.Second, "how long to wait for each answer of Paidwen")
 	set.StringVar(&o.onUnavailable, "on-unavailable", "block", "what to do when Paidwen does not answer: block or allow")
-	set.Func("output", "a Go text/template printed on stdout for a hook that reads JSON, with .Allowed, .Reason, .Decision, .Approval and the json function", func(text string) error {
-		if text == "" {
-			o.output = nil
-			return nil
-		}
-		parsed, err := template.New("output").Funcs(template.FuncMap{"json": encode}).Parse(text)
+	set.StringVar(&o.outputText, "output", "", "a Go text/template printed on stdout for a hook that reads JSON, with .Allowed, .Reason, .Decision, .Approval and the json function")
+	set.StringVar(&o.outputFile, "output-file", "", "the path of a file that holds the -output template, for a shell that strips quotes")
+}
+
+func (o *options) parseOutput() error {
+	text := o.outputText
+	switch {
+	case o.outputText != "" && o.outputFile != "":
+		return errors.New("give the template with -output or with -output-file, and only one of them")
+	case o.outputFile != "":
+		path, err := expandHome(o.outputFile)
 		if err != nil {
 			return err
 		}
-		o.output = parsed
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("the template of -output-file cannot be read: %w", err)
+		}
+		text = string(content)
+	case o.outputText == "":
 		return nil
-	})
+	}
+	parsed, err := template.New("output").Funcs(template.FuncMap{"json": encode}).Parse(text)
+	if err != nil {
+		return err
+	}
+	o.output = parsed
+	return nil
+}
+
+func expandHome(path string) (string, error) {
+	if path != "~" && !strings.HasPrefix(path, "~/") && !strings.HasPrefix(path, "~\\") {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, path[1:]), nil
 }
 
 func (o *options) validate(rest []string) error {
@@ -136,6 +167,9 @@ func (o *options) validate(rest []string) error {
 		return fmt.Errorf("paidwen check takes no argument, and got %q", strings.Join(rest, " "))
 	}
 	if err := o.spec.Validate(); err != nil {
+		return err
+	}
+	if err := o.parseOutput(); err != nil {
 		return err
 	}
 	switch {
@@ -211,7 +245,7 @@ func (o *options) finish(r result, stdout, stderr io.Writer) int {
 	}
 	var buffer bytes.Buffer
 	err := o.output.Execute(&buffer, view{Allowed: r.allowed, Reason: r.reason, Decision: object(r.decision), Approval: object(r.approval)})
-	if err == nil {
+	if err == nil && strings.TrimSpace(buffer.String()) != "" {
 		_, err = stdout.Write(buffer.Bytes())
 	}
 	if err != nil {

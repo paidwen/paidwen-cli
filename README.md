@@ -38,22 +38,27 @@ paidwen login
 
 `paidwen login` signs this machine in as your agent, in your browser. `paidwen status` shows the agent this machine acts as.
 
-## The hook of Claude Code asks Paidwen before each tool
+## The hook of a coding agent asks Paidwen before each tool
 
-Add this hook to the settings of Claude Code, for example in `~/.claude/settings.json`:
+Save this template as `~/.paidwen/hook-answer.tmpl`. It prints the refusal and its reason as the JSON that Codex and Claude Code read, and nothing when the tool may run:
+
+```text
+{{ if not .Allowed }}{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":{{ json .Reason }}}}{{ end }}
+```
+
+Then add this hook to `~/.codex/hooks.json`, and trust it once with `/hooks` in Codex:
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "*",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",
-            "command": "paidwen check -tool /tool_name -params /tool_input -param cwd=/cwd -session /session_id -call /tool_use_id -wait 580s",
-            "timeout": 600,
-            "onFailure": "block"
+            "command": "paidwen check -tool /tool_name -params /tool_input -param cwd=/cwd -session /session_id -call /tool_use_id -wait 0s -output-file ~/.paidwen/hook-answer.tmpl",
+            "timeout": 60
           }
         ]
       }
@@ -62,7 +67,7 @@ Add this hook to the settings of Claude Code, for example in `~/.claude/settings
 }
 ```
 
-`-tool`, `-params`, `-param`, `-session` and `-call` read fields of the JSON that the hook receives, by JSON pointers. `-wait 580s` keeps a wait for a human approval under the `timeout` of 600 seconds. With `"onFailure": "block"`, Claude Code blocks the tool when the command fails or does not answer in time. `paidwen check -h` lists every flag.
+`-tool`, `-params`, `-param`, `-session` and `-call` read fields of the JSON that the hook receives, by JSON pointers. `-wait 0s` answers at once when a rule asks for a human approval, and the same command runs once someone approves it. Claude Code takes the same line in `~/.claude/settings.json`, with `-wait 580s`, `"timeout": 600` and `"onFailure": "block"`, since it waits for its hooks. `paidwen check -h` lists every flag.
 
 The guide for each coding agent is at https://paidwen.com/docs/coding-agents.
 
