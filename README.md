@@ -67,7 +67,7 @@ Then add this hook to `~/.codex/hooks.json`, and trust it once with `/hooks` in 
 }
 ```
 
-`-tool`, `-params`, `-param`, `-session` and `-call` read fields of the JSON that the hook receives, by JSON pointers. `-wait 0s` answers at once when a rule asks for a human approval, and the same command runs once someone approves it. Claude Code takes the same line in `~/.claude/settings.json`, with `-wait 580s`, `"timeout": 600` and `"onFailure": "block"`, since it waits for its hooks. `paidwen check -h` lists every flag.
+`-tool`, `-params`, `-param`, `-session` and `-call` read fields of the JSON that the hook receives, by JSON pointers. `-wait 0s` answers at once when a rule asks for a human approval, and the same command runs once someone approves it. Claude Code takes the same line in `~/.claude/settings.json`, with `-wait 580s`, `"timeout": 600` and `"onFailure": "block"`, since it waits for its hooks. Claude Code runs its hooks in a Bash shell, Git Bash on Windows, which turns an argument that starts with `/` into a Windows path: start its line with `MSYS_NO_PATHCONV=1 paidwen check`, which keeps the pointers as they are. `paidwen check -h` lists every flag.
 
 The guide for each coding agent is at https://paidwen.com/docs/coding-agents.
 
