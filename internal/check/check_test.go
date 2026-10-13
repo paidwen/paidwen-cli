@@ -3,6 +3,7 @@ package check
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf16"
 	"uuid"
 
 	"github.com/paidwen/paidwen-cli/internal/contract"
@@ -715,5 +717,48 @@ func TestATemplateFileAnswersInJSONAndStaysSilentOnAllow(t *testing.T) {
 	code, stdout, stderr = h.run(`{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"ls"}}`, claude("-output-file", file, "-output", "{{.Reason}}")...)
 	if code != 2 || stdout != "" || !strings.Contains(stderr, "only one of them") {
 		t.Fatalf("both templates = %d %q %q", code, stdout, stderr)
+	}
+}
+
+func TestATemplateFileWithAByteOrderMarkAnswersTheSame(t *testing.T) {
+	answerTemplate := `{{ if not .Allowed }}{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":{{ json .Reason }}}}{{ end }}` + "\r\n"
+	littleEndian := []byte{0xFF, 0xFE}
+	bigEndian := []byte{0xFE, 0xFF}
+	for _, unit := range utf16.Encode([]rune(answerTemplate)) {
+		littleEndian = binary.LittleEndian.AppendUint16(littleEndian, unit)
+		bigEndian = binary.BigEndian.AppendUint16(bigEndian, unit)
+	}
+	for name, content := range map[string][]byte{
+		"UTF-8":    append([]byte{0xEF, 0xBB, 0xBF}, answerTemplate...),
+		"UTF-16LE": littleEndian,
+		"UTF-16BE": bigEndian,
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.decide = func(w http.ResponseWriter, request contract.DecisionRequest) {
+				if command, _ := (*request.Params)["command"].(string); strings.Contains(command, "push") {
+					reply(w, ruled(h.decision(request, contract.VerdictBlock), "rule-push", "No force push"))
+					return
+				}
+				reply(w, h.decision(request, contract.VerdictAllow))
+			}
+			file := filepath.Join(t.TempDir(), "deny.tmpl")
+			if err := os.WriteFile(file, content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			line := claude("-output-file", file)
+			if code, stdout, stderr := h.run(`{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"ls"},"tool_use_id":"exec-1"}`, line...); code != 0 || stdout != "" || stderr != "" {
+				t.Fatalf("allow = %d %q %q", code, stdout, stderr)
+			}
+			code, stdout, stderr := h.run(`{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"git push -f origin main"},"tool_use_id":"exec-2"}`, line...)
+			var answer struct {
+				HookSpecificOutput struct {
+					PermissionDecision string `json:"permissionDecision"`
+				} `json:"hookSpecificOutput"`
+			}
+			if err := json.Unmarshal([]byte(stdout), &answer); code != 0 || stderr != "" || err != nil || answer.HookSpecificOutput.PermissionDecision != "deny" {
+				t.Fatalf("deny = %d %q %q", code, stdout, stderr)
+			}
+		})
 	}
 }

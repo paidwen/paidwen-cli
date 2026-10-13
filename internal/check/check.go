@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"unicode/utf16"
 	"uuid"
 
 	"github.com/paidwen/paidwen-cli/internal/api"
@@ -139,7 +141,7 @@ func (o *options) parseOutput() error {
 		if err != nil {
 			return fmt.Errorf("the template of -output-file cannot be read: %w", err)
 		}
-		text = string(content)
+		text = templateText(content)
 	case o.outputText == "":
 		return nil
 	}
@@ -149,6 +151,26 @@ func (o *options) parseOutput() error {
 	}
 	o.output = parsed
 	return nil
+}
+
+func templateText(content []byte) string {
+	switch {
+	case bytes.HasPrefix(content, []byte{0xEF, 0xBB, 0xBF}):
+		return string(content[3:])
+	case bytes.HasPrefix(content, []byte{0xFF, 0xFE}):
+		return utf16Text(content[2:], binary.LittleEndian)
+	case bytes.HasPrefix(content, []byte{0xFE, 0xFF}):
+		return utf16Text(content[2:], binary.BigEndian)
+	}
+	return string(content)
+}
+
+func utf16Text(content []byte, order binary.ByteOrder) string {
+	units := make([]uint16, len(content)/2)
+	for index := range units {
+		units[index] = order.Uint16(content[2*index:])
+	}
+	return string(utf16.Decode(units))
 }
 
 func expandHome(path string) (string, error) {
